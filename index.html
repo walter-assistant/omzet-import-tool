@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="nl">
 <head>
   <meta charset="utf-8" />
@@ -77,6 +77,7 @@ function categoryForVeldoffice(){return 'Handmatig'}
 function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('antea')) return 'Antea'; if(l.includes('aps')) return 'APS'; if(l.includes('socotec')) return 'Socotec'; if(l.includes('hb advies')) return 'HB Advies'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
 function addRow(r){rows.push({...r,id:uid()})}
 function parseVeldoffice(text,file){
+  if(!/VERZAMELFACTUUR/i.test(text) || !/VERBRUIKSARTIKELEN/i.test(text)) return 0;
   // Robuuste aanpak: niet gokken op projectcode-formaten in de verzameltabel.
   // Veldoffice detailblokken bevatten altijd Projectnummer / Naam onderzoek / Datum / Totaal.
   const sections=text.split('VERBRUIKSARTIKELEN').slice(1);
@@ -86,7 +87,7 @@ function parseVeldoffice(text,file){
     const naam=pick(/Naam onderzoek:\s*(.*?)\s+Datum:/,sec);
     const datum=pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/,sec);
     const opm=pick(/Opmerking:\s*(.*?)\s+Projectleider:/,sec);
-    const bedrag=euroToNum(pick(/Totaal:\s*€?\s*([\d.]+,\d{2})/,sec));
+    const bedrag=euroToNum(pick(/Totaal:\D*([\d.]+,\d{2})/,sec));
     if(!project && !naam && !bedrag) continue;
     addRow({status:bedrag?'OK':'Controle nodig',afdeling:'Handmatig',categorie:categoryForVeldoffice(),bron:'Veldoffice',blok:blockFromText(opm)||blockFromText(text),project,naam,datum,bedrag,opmerking:opm,bestand:file.name});
     count++;
@@ -94,7 +95,7 @@ function parseVeldoffice(text,file){
   // Fallback voor eventuele korte verzamelfactuur zonder detailblokken.
   if(!count){
     const summary=text.split('VERBRUIKSARTIKELEN')[0]||'';
-    const re=/([^\n]+?)\s+(\S+)\s+€\s*([\d.]+,\d{2})/g;
+    const re=/([^\n]+?)\s+(\S+)\D+([\d.]+,\d{2})/g;
     let m;
     while((m=re.exec(summary))){
       let naam=norm(m[1]).replace(/^VERZAMELFACTUUR \d{2}-\d{2}-\d{4} Naam Projectcode Bedrag /,'');
@@ -107,7 +108,7 @@ function parseVeldoffice(text,file){
 function parseInkooporder(text,file){
   if(!/Totaal te factureren/i.test(text) || !/Contractnr/i.test(text)) return 0;
   const one=norm(text);
-  const bedrag=euroToNum(pick(/Totaal te factureren:\s*€\s*([\d.]+,\d{2})/i,one));
+  const bedrag=euroToNum(pick(/Totaal te factureren:\D*([\d.]+,\d{2})/i,one));
   const project=pick(/Project\s+(.*?)(?=\s+Projectnummer\s+)/i,one);
   const projectnummer=pick(/Projectnummer\s+([^\s]+)/i,one);
   const contract=pick(/Contractnr\s+([^\s]+)/i,one);
@@ -117,7 +118,7 @@ function parseInkooporder(text,file){
   return 1;
 }
 function addUnknown(file){addRow({status:'Controle nodig',afdeling:'',categorie:'Controle nodig',bron:'Onbekend',blok:'',project:'',naam:'',datum:'',bedrag:0,opmerking:'PDF-type nog niet herkend',bestand:file.name})}
-async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const before=rows.length; const text=await pdfText(file); let n=parseVeldoffice(text,file); if(!n)n=parseInkooporder(text,file); if(!n)addUnknown(file); log('Gevonden regels: '+(rows.length-before));}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render(); saveRows()}
+async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const before=rows.length; const text=await pdfText(file); let n=parseInkooporder(text,file); if(!n)n=parseVeldoffice(text,file); if(!n)addUnknown(file); log('Gevonden regels: '+(rows.length-before));}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render(); saveRows()}
 function groupSum(list,key){const m={}; list.forEach(r=>{const k=(r[key]||'Onbekend').trim()||'Onbekend'; m[k]=(m[k]||0)+(Number(r.bedrag)||0)}); return Object.entries(m).sort((a,b)=>b[1]-a[1])}
 function summaryTable(entries){if(!entries.length)return '<div class="muted">Geen regels in deze periode.</div>'; return '<table><thead><tr><th>Naam</th><th>Omzet</th></tr></thead><tbody>'+entries.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${money(v)}</td></tr>`).join('')+'</tbody></table>'}
 function stats(){const list=filteredRows(); const total=list.reduce((a,r)=>a+(Number(r.bedrag)||0),0); const hand=list.filter(r=>r.afdeling==='Handmatig').reduce((a,r)=>a+(Number(r.bedrag)||0),0); const mach=list.filter(r=>r.afdeling==='Machinaal').reduce((a,r)=>a+(Number(r.bedrag)||0),0); document.getElementById('stats').innerHTML=`<div class="stat"><b>${list.length}</b><span>regels in selectie</span></div><div class="stat"><b>${money(total)}</b><span>totaal</span></div><div class="stat"><b>${money(hand)}</b><span>handmatig</span></div><div class="stat"><b>${money(mach)}</b><span>machinaal</span></div>`; document.getElementById('byClient').innerHTML=summaryTable(groupSum(list,'blok')); document.getElementById('byCategory').innerHTML=summaryTable(groupSum(list,'categorie'))}
@@ -132,3 +133,4 @@ loadRows(); render();
 </script>
 </body>
 </html>
+
