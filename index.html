@@ -77,17 +77,30 @@ function categoryForVeldoffice(){return 'Handmatig'}
 function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('antea')) return 'Antea'; if(l.includes('aps')) return 'APS'; if(l.includes('socotec')) return 'Socotec'; if(l.includes('hb advies')) return 'HB Advies'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
 function addRow(r){rows.push({...r,id:uid()})}
 function parseVeldoffice(text,file){
-  const summary=text.split('VERBRUIKSARTIKELEN')[0]||'';
-  const code='(?:PB-\\d{2}-\\d{5}|\\d{4,12}(?:[-.]\\d{1,6})?|[A-Z]{1,6}\\d{0,6}(?:[- ][A-Z]{0,6}\\d{2,12})?(?:[-.]\\d{1,6})?)';
-  const re=new RegExp('([^\\n]+?)\\s+('+code+')\\s+€\\s*([\\d.]+,\\d{2})','g');
-  let m,count=0; const details=text.split('VERBRUIKSARTIKELEN').slice(1);
-  while((m=re.exec(summary))){
-    let naam=norm(m[1]).replace(/^VERZAMELFACTUUR \d{2}-\d{2}-\d{4} Naam Projectcode Bedrag /,'');
-    const project=m[2], bedrag=euroToNum(m[3]);
-    const sec=details.find(s=>s.includes(project))||'';
+  // Robuuste aanpak: niet gokken op projectcode-formaten in de verzameltabel.
+  // Veldoffice detailblokken bevatten altijd Projectnummer / Naam onderzoek / Datum / Totaal.
+  const sections=text.split('VERBRUIKSARTIKELEN').slice(1);
+  let count=0;
+  for(const sec of sections){
+    const project=pick(/Projectnummer:\s*(.*?)\s+Naam onderzoek:/,sec);
+    const naam=pick(/Naam onderzoek:\s*(.*?)\s+Datum:/,sec);
     const datum=pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/,sec);
     const opm=pick(/Opmerking:\s*(.*?)\s+Projectleider:/,sec);
-    addRow({status:'OK',afdeling:'Handmatig',categorie:categoryForVeldoffice(),bron:'Veldoffice',blok:blockFromText(opm)||blockFromText(text),project,naam,datum,bedrag,opmerking:opm,bestand:file.name}); count++;
+    const bedrag=euroToNum(pick(/Totaal:\s*€?\s*([\d.]+,\d{2})/,sec));
+    if(!project && !naam && !bedrag) continue;
+    addRow({status:bedrag?'OK':'Controle nodig',afdeling:'Handmatig',categorie:categoryForVeldoffice(),bron:'Veldoffice',blok:blockFromText(opm)||blockFromText(text),project,naam,datum,bedrag,opmerking:opm,bestand:file.name});
+    count++;
+  }
+  // Fallback voor eventuele korte verzamelfactuur zonder detailblokken.
+  if(!count){
+    const summary=text.split('VERBRUIKSARTIKELEN')[0]||'';
+    const re=/([^\n]+?)\s+(\S+)\s+€\s*([\d.]+,\d{2})/g;
+    let m;
+    while((m=re.exec(summary))){
+      let naam=norm(m[1]).replace(/^VERZAMELFACTUUR \d{2}-\d{2}-\d{4} Naam Projectcode Bedrag /,'');
+      addRow({status:'OK',afdeling:'Handmatig',categorie:categoryForVeldoffice(),bron:'Veldoffice',blok:blockFromText(text),project:m[2],naam,datum:'',bedrag:euroToNum(m[3]),opmerking:'',bestand:file.name});
+      count++;
+    }
   }
   return count;
 }
