@@ -4,6 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Omzet Import Tool - Ground Research</title>
+  <meta name="theme-color" content="#2d5a1e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Omzet Tool" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
@@ -129,6 +136,9 @@ document.body.addEventListener('click',e=>{const b=e.target.closest('[data-del]'
 document.getElementById('fileInput').addEventListener('change',e=>handleFiles(e.target.files)); const drop=document.getElementById('drop'); drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag')}); drop.addEventListener('dragleave',()=>drop.classList.remove('drag')); drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');handleFiles(e.dataTransfer.files)});
 document.getElementById('clearBtn').onclick=()=>{if(confirm('Alle opgeslagen regels wissen?')){rows.length=0;saveRows();render();logEl.textContent='Alles gewist.'}};
 document.getElementById('exportBtn').onclick=()=>{const data=filteredRows().map(r=>({'Afdeling':r.afdeling,'Categorie voorstel':r.categorie,'Bron':r.bron,'Opdrachtgever/blok':r.blok,'Projectcode':r.project,'Project/naam':r.naam,'Datum':r.datum,'Bedrag ex btw':Number(r.bedrag)||0,'Opmerking':r.opmerking,'Bestand':r.bestand,'Status':r.status})); const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Omzet import'); XLSX.writeFile(wb,'omzet-import-'+new Date().toISOString().slice(0,10)+'.xlsx')};
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => null));
+}
 loadRows(); render();
 </script>
 </body>
