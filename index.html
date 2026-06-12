@@ -56,10 +56,10 @@ function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
 function pick(re,text){const m=String(text).match(re); return m?norm(m[1]):''}
 async function pdfText(file){const buf=await file.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:buf}).promise; let txt=''; for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i); const content=await page.getTextContent(); txt += content.items.map(x=>x.str).join(' ')+'\n'} return txt}
 function categoryForVeldoffice(){return 'Handmatig'}
-function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('antea')) return 'Antea'; if(l.includes('hb advies')) return 'HB Advies'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
+function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('antea')) return 'Antea'; if(l.includes('aps')) return 'APS'; if(l.includes('hb advies')) return 'HB Advies'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
 function parseVeldoffice(text,file){
   const summary=text.split('VERBRUIKSARTIKELEN')[0]||'';
-  const code='(?:PB-\\d{2}-\\d{5}|\\d{4,12}(?:\\.\\d{1,6})?|[A-Z]{1,6}[- ]?\\d{3,12}(?:\\.\\d{1,6})?)';
+  const code='(?:PB-\\d{2}-\\d{5}|\\d{4,12}(?:\\.\\d{1,6})?|[A-Z]{1,6}\\d{0,6}(?:[- ][A-Z]{0,6}\\d{2,12})?(?:\\.\\d{1,6})?)';
   const re=new RegExp('([^\\n]+?)\\s+('+code+')\\s+€\\s*([\\d.]+,\\d{2})','g');
   let m,count=0; const details=text.split('VERBRUIKSARTIKELEN').slice(1);
   while((m=re.exec(summary))){
