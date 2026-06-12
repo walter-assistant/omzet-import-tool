@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Omzet Import Tool - Ground Research</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root{--green:#2d5a1e;--light:#f3f7f1;--border:#d9e4d4;--muted:#667085;--danger:#b42318;--ok:#027a48}
+    *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#f7f9f6;color:#1d2939}
+    header{background:linear-gradient(135deg,#244916,#3d7428);color:white;padding:22px 18px}
+    header h1{margin:0;font-size:24px} header p{margin:6px 0 0;opacity:.9;font-size:14px}
+    main{max-width:1180px;margin:0 auto;padding:18px}
+    .card{background:white;border:1px solid var(--border);border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:14px;overflow:hidden}
+    .card h2{font-size:16px;margin:0;padding:14px 16px;border-bottom:1px solid var(--border);background:var(--light)}
+    .body{padding:16px}
+    .drop{border:2px dashed #9cc48d;border-radius:12px;padding:28px;text-align:center;background:#fbfdf9;cursor:pointer}
+    .drop.drag{background:#eaf5e5;border-color:var(--green)}
+    .drop strong{display:block;font-size:18px;margin-bottom:6px}.drop span{color:var(--muted);font-size:13px}
+    input[type=file]{display:none}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+    button{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;background:var(--green);color:white}
+    button.secondary{background:white;color:var(--green);border:1px solid var(--green)} button.danger{background:var(--danger)} button:disabled{opacity:.5;cursor:not-allowed}
+    .stats{display:flex;gap:10px;flex-wrap:wrap}.stat{background:var(--light);border:1px solid var(--border);padding:10px 12px;border-radius:10px;min-width:150px}.stat b{display:block;font-size:20px}.stat span{color:var(--muted);font-size:12px}
+    table{width:100%;border-collapse:collapse;font-size:13px} th,td{border-bottom:1px solid #edf1ea;padding:8px;vertical-align:top} th{background:#f8faf7;text-align:left;color:#344054;position:sticky;top:0;z-index:1}
+    td.num{text-align:right;font-variant-numeric:tabular-nums} select,input.cell{width:100%;border:1px solid #d0d5dd;border-radius:6px;padding:6px;background:white;font-size:13px}.wrap{overflow:auto;max-height:58vh}
+    .pill{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.ok{background:#ecfdf3;color:var(--ok)}.warn{background:#fffaeb;color:#b54708}.bad{background:#fef3f2;color:var(--danger)}
+    .log{font-family:Consolas,monospace;font-size:12px;color:#475467;white-space:pre-wrap;background:#f8fafc;border-radius:8px;padding:10px;max-height:150px;overflow:auto}
+  </style>
+</head>
+<body>
+<header>
+  <h1>Omzet Import Tool</h1>
+  <p>Sleep Veldoffice verzamelfacturen en machinale inkooporders erin. Controleer, pas categorie aan en exporteer naar Excel.</p>
+</header>
+<main>
+  <section class="card"><h2>1. PDF's uploaden</h2><div class="body">
+    <label class="drop" id="drop"><input id="fileInput" type="file" multiple accept="application/pdf,.pdf" />
+      <strong>Sleep PDF's hierheen of klik om te kiezen</strong><span>Veldoffice, Eco-Well/inkooporders, later BoorApp/Offerte Tool.</span>
+    </label>
+    <div class="toolbar"><button id="exportBtn" disabled>Excel exporteren</button><button class="secondary" id="clearBtn">Wissen</button></div>
+  </div></section>
+  <section class="card"><h2>2. Samenvatting</h2><div class="body"><div class="stats" id="stats"></div></div></section>
+  <section class="card"><h2>3. Controlelijst</h2><div class="body wrap"><table id="tbl"><thead><tr>
+    <th>Status</th><th>Afdeling</th><th>Categorie</th><th>Bron</th><th>Opdrachtgever/blok</th><th>Projectcode</th><th>Project/naam</th><th>Datum</th><th>Bedrag ex btw</th><th>Opmerking</th><th>Bestand</th>
+  </tr></thead><tbody></tbody></table></div></section>
+  <section class="card"><h2>Log</h2><div class="body"><div class="log" id="log">Klaar.</div></div></section>
+</main>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const rows=[]; const tbody=document.querySelector('#tbl tbody'); const logEl=document.getElementById('log');
+function money(n){return (Number(n)||0).toLocaleString('nl-NL',{style:'currency',currency:'EUR'}).replace('€','€ ')}
+function euroToNum(s){return Number(String(s||'').replace(/€/g,'').replace(/\s/g,'').replace(/\./g,'').replace(',','.'))||0}
+function log(s){logEl.textContent += '\n' + s; logEl.scrollTop=logEl.scrollHeight}
+function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
+function pick(re,text){const m=String(text).match(re); return m?norm(m[1]):''}
+async function pdfText(file){const buf=await file.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:buf}).promise; let txt=''; for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i); const content=await page.getTextContent(); txt += content.items.map(x=>x.str).join(' ')+'\n'} return txt}
+function categoryForVeldoffice(){return 'Handmatig'}
+function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('hb advies')) return 'HB Advies'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
+function parseVeldoffice(text,file){
+  const summary=text.split('VERBRUIKSARTIKELEN')[0]||'';
+  const code='(?:PB-\\d{2}-\\d{5}|\\d{6,12}|[A-Z]{1,6}[- ]?\\d{3,12})';
+  const re=new RegExp('([^\\n]+?)\\s+('+code+')\\s+€\\s*([\\d.]+,\\d{2})','g');
+  let m,count=0; const details=text.split('VERBRUIKSARTIKELEN').slice(1);
+  while((m=re.exec(summary))){
+    let naam=norm(m[1]).replace(/^VERZAMELFACTUUR \d{2}-\d{2}-\d{4} Naam Projectcode Bedrag /,'');
+    const project=m[2], bedrag=euroToNum(m[3]);
+    const sec=details.find(s=>s.includes(project))||'';
+    const datum=pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/,sec);
+    const opm=pick(/Opmerking:\s*(.*?)\s+Projectleider:/,sec);
+    rows.push({status:'OK',afdeling:'Handmatig',categorie:categoryForVeldoffice(),bron:'Veldoffice',blok:blockFromText(opm)||blockFromText(text),project,naam,datum,bedrag,opmerking:opm,bestand:file.name}); count++;
+  }
+  return count;
+}
+function parseInkooporder(text,file){
+  if(!/Totaal te factureren/i.test(text) || !/Contractnr/i.test(text)) return 0;
+  const one=norm(text);
+  const bedrag=euroToNum(pick(/Totaal te factureren:\s*€\s*([\d.]+,\d{2})/i,one));
+  const project=pick(/Project\s+(.*?)(?=\s+Projectnummer\s+)/i,one);
+  const projectnummer=pick(/Projectnummer\s+([^\s]+)/i,one);
+  const contract=pick(/Contractnr\s+([^\s]+)/i,one);
+  const datum=pick(/Datum\s+(\d{2}-\d{2}-\d{4})/i,one);
+  const opm=pick(/Opmerkingen\s+(.*?)(?=\s+Ondertekend\s+)/i,one);
+  rows.push({status:bedrag?'OK':'Controle nodig',afdeling:'Machinaal',categorie:'Sonic',bron:'Inkooporder',blok:blockFromText(one)||'Eco-Well',project:contract||projectnummer,naam:project,datum,bedrag,opmerking:opm,bestand:file.name});
+  return 1;
+}
+function addUnknown(file){rows.push({status:'Controle nodig',afdeling:'',categorie:'Controle nodig',bron:'Onbekend',blok:'',project:'',naam:'',datum:'',bedrag:0,opmerking:'PDF-type nog niet herkend',bestand:file.name})}
+async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const text=await pdfText(file); let n=parseVeldoffice(text,file); if(!n)n=parseInkooporder(text,file); if(!n)addUnknown(file); log('Gevonden regels: '+(n||1));}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render()}
+function render(){tbody.innerHTML=''; rows.forEach((r,i)=>{const tr=document.createElement('tr'); const pill=r.status==='OK'?'<span class="pill ok">OK</span>':'<span class="pill warn">Controle</span>'; tr.innerHTML=`<td>${pill}</td><td><select data-i="${i}" data-k="afdeling"><option></option><option ${r.afdeling==='Handmatig'?'selected':''}>Handmatig</option><option ${r.afdeling==='Machinaal'?'selected':''}>Machinaal</option></select></td><td><select data-i="${i}" data-k="categorie"><option ${r.categorie==='Handmatig'?'selected':''}>Handmatig</option><option ${r.categorie==='Sonic'?'selected':''}>Sonic</option><option ${r.categorie==='Spoelboren'?'selected':''}>Spoelboren</option><option ${r.categorie==='Controle nodig'?'selected':''}>Controle nodig</option></select></td><td>${r.bron}</td><td><input class="cell" data-i="${i}" data-k="blok" value="${esc(r.blok)}"></td><td><input class="cell" data-i="${i}" data-k="project" value="${esc(r.project)}"></td><td><input class="cell" data-i="${i}" data-k="naam" value="${esc(r.naam)}"></td><td><input class="cell" data-i="${i}" data-k="datum" value="${esc(r.datum)}"></td><td class="num"><input class="cell" data-i="${i}" data-k="bedrag" value="${r.bedrag}" style="text-align:right"></td><td><input class="cell" data-i="${i}" data-k="opmerking" value="${esc(r.opmerking)}"></td><td>${esc(r.bestand)}</td>`; tbody.appendChild(tr)}); document.getElementById('exportBtn').disabled=!rows.length; stats()}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function stats(){const total=rows.reduce((a,r)=>a+(Number(r.bedrag)||0),0); const hand=rows.filter(r=>r.afdeling==='Handmatig').reduce((a,r)=>a+(Number(r.bedrag)||0),0); const mach=rows.filter(r=>r.afdeling==='Machinaal').reduce((a,r)=>a+(Number(r.bedrag)||0),0); document.getElementById('stats').innerHTML=`<div class="stat"><b>${rows.length}</b><span>regels</span></div><div class="stat"><b>${money(total)}</b><span>totaal</span></div><div class="stat"><b>${money(hand)}</b><span>handmatig</span></div><div class="stat"><b>${money(mach)}</b><span>machinaal</span></div>`}
+document.body.addEventListener('input',e=>{const t=e.target;if(t.dataset.i){let v=t.value;if(t.dataset.k==='bedrag')v=euroToNum(v); rows[+t.dataset.i][t.dataset.k]=v; stats()}}); document.body.addEventListener('change',e=>{const t=e.target;if(t.dataset.i){rows[+t.dataset.i][t.dataset.k]=t.value; stats()}})
+document.getElementById('fileInput').addEventListener('change',e=>handleFiles(e.target.files)); const drop=document.getElementById('drop'); drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag')}); drop.addEventListener('dragleave',()=>drop.classList.remove('drag')); drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');handleFiles(e.dataTransfer.files)});
+document.getElementById('clearBtn').onclick=()=>{rows.length=0;render();logEl.textContent='Gewist.'};
+document.getElementById('exportBtn').onclick=()=>{const data=rows.map(r=>({'Afdeling':r.afdeling,'Categorie voorstel':r.categorie,'Bron':r.bron,'Opdrachtgever/blok':r.blok,'Projectcode':r.project,'Project/naam':r.naam,'Datum':r.datum,'Bedrag ex btw':Number(r.bedrag)||0,'Opmerking':r.opmerking,'Bestand':r.bestand,'Status':r.status})); const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Omzet import'); XLSX.writeFile(wb,'omzet-import-'+new Date().toISOString().slice(0,10)+'.xlsx')}; render();
+</script>
+</body>
+</html>
