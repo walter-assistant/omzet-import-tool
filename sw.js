@@ -1,4 +1,4 @@
-const CACHE_NAME = 'omzet-import-tool-v1';
+const CACHE_NAME = 'omzet-import-tool-v2';
 const CORE_ASSETS = [
   './',
   './index.html',

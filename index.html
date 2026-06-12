@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="nl">
 <head>
   <meta charset="utf-8" />
@@ -13,6 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root{--green:#2d5a1e;--light:#f3f7f1;--border:#d9e4d4;--muted:#667085;--danger:#b42318;--ok:#027a48}
     *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#f7f9f6;color:#1d2939}
@@ -46,7 +47,7 @@
     <label class="drop" id="drop"><input id="fileInput" type="file" multiple accept="application/pdf,.pdf" />
       <strong>Sleep PDF's hierheen of klik om te kiezen</strong><span>Veldoffice, Eco-Well/inkooporders, later BoorApp/Offerte Tool.</span>
     </label>
-    <div class="toolbar"><button id="exportBtn" disabled>Excel exporteren</button><button class="secondary" id="clearBtn">Alles wissen</button><span class="muted">Gegevens blijven lokaal in deze browser bewaard.</span></div>
+    <div class="toolbar"><button id="exportBtn" disabled>Excel exporteren</button><button class="secondary" id="clearBtn">Alles wissen</button><button class="secondary" id="syncBtn" type="button">Cloud sync</button><span class="muted" id="cloudStatus">Cloud: laden...</span></div>
   </div></section>
   <section class="card"><h2>2. Samenvatting en omzetoverzicht</h2><div class="body">
     <div class="filters">
@@ -65,7 +66,13 @@
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const STORAGE_KEY='gr_omzet_import_rows_v1';
+const DEVICE_KEY='gr_omzet_import_device_id';
+const SUPABASE_URL='https://varflklvllrnrzhnbbpg.supabase.co';
+const SUPABASE_KEY='sb_publishable_U1N34WcxGPZSf9qDSHTC2g_2Ah_yR3s';
+const CLOUD_TABLE='omzet_import_rows';
 const rows=[]; const tbody=document.querySelector('#tbl tbody'); const logEl=document.getElementById('log');
+let sb=null, cloudReady=false, cloudLoading=false, saveTimer=null;
+const deviceId=localStorage.getItem(DEVICE_KEY)||uid(); localStorage.setItem(DEVICE_KEY,deviceId);
 function money(n){return (Number(n)||0).toLocaleString('nl-NL',{style:'currency',currency:'EUR'}).replace('€','€ ')}
 function euroToNum(s){return Number(String(s||'').replace(/€/g,'').replace(/\s/g,'').replace(/\./g,'').replace(',','.'))||0}
 function log(s){logEl.textContent += '\n' + s; logEl.scrollTop=logEl.scrollHeight}
@@ -73,8 +80,15 @@ function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
 function pick(re,text){const m=String(text).match(re); return m?norm(m[1]):''}
 function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
-function saveRows(){localStorage.setItem(STORAGE_KEY, JSON.stringify(rows))}
-function loadRows(){try{const old=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); rows.splice(0,rows.length,...old.map(r=>({...r,id:r.id||uid()}))); if(rows.length) log('Geheugen geladen: '+rows.length+' regels.')}catch(e){log('Geheugen kon niet worden geladen: '+e.message)}}
+function setCloudStatus(s){const el=document.getElementById('cloudStatus'); if(el) el.textContent=s}
+function touchRow(r){r.updated_at=new Date().toISOString(); if(!r.created_at) r.created_at=r.updated_at; return r}
+function cloudPayload(r){return {id:r.id,status:r.status||'',afdeling:r.afdeling||'',categorie:r.categorie||'',bron:r.bron||'',blok:r.blok||'',project:r.project||'',naam:r.naam||'',datum:r.datum||'',bedrag:Number(r.bedrag)||0,opmerking:r.opmerking||'',bestand:r.bestand||'',source_device:deviceId,created_at:r.created_at||new Date().toISOString(),updated_at:r.updated_at||new Date().toISOString()}}
+function saveRows(){localStorage.setItem(STORAGE_KEY, JSON.stringify(rows)); if(cloudReady&&!cloudLoading) scheduleCloudSave()}
+function loadRows(){try{const old=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); rows.splice(0,rows.length,...old.map(r=>({...r,id:r.id||uid(),updated_at:r.updated_at||r.created_at||new Date().toISOString()}))); if(rows.length) log('Geheugen geladen: '+rows.length+' lokale regels.')}catch(e){log('Geheugen kon niet worden geladen: '+e.message)}}
+function scheduleCloudSave(){clearTimeout(saveTimer); saveTimer=setTimeout(syncToCloud,700)}
+async function syncToCloud(){if(!cloudReady||!sb||!rows.length)return; try{setCloudStatus('Cloud: opslaan...'); const {error}=await sb.from(CLOUD_TABLE).upsert(rows.map(cloudPayload),{onConflict:'id'}); if(error) throw error; setCloudStatus('Cloud: gesynchroniseerd')}catch(e){setCloudStatus('Cloud: fout'); log('Cloud opslaan mislukt: '+e.message)}}
+function mergeCloudRows(cloudRows){const byId=new Map(rows.map(r=>[r.id,r])); for(const c of cloudRows||[]){const local=byId.get(c.id); if(!local){rows.push({...c,bedrag:Number(c.bedrag)||0}); continue;} const lt=new Date(local.updated_at||0).getTime(); const ct=new Date(c.updated_at||0).getTime(); if(ct>lt) Object.assign(local,{...c,bedrag:Number(c.bedrag)||0});} rows.sort((a,b)=>String(a.datum||'').localeCompare(String(b.datum||''))||String(a.blok||'').localeCompare(String(b.blok||'')))}
+async function initCloud(){try{if(!window.supabase){setCloudStatus('Cloud: bibliotheek ontbreekt');return;} sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY); cloudLoading=true; setCloudStatus('Cloud: laden...'); const {data,error}=await sb.from(CLOUD_TABLE).select('*').order('created_at',{ascending:true}); if(error) throw error; mergeCloudRows(data||[]); cloudReady=true; cloudLoading=false; saveRows(); render(); setCloudStatus('Cloud: actief'); log('Cloud geladen: '+(data||[]).length+' regels.')}catch(e){cloudReady=false; cloudLoading=false; setCloudStatus('Cloud: niet actief'); log('Cloud nog niet actief: '+e.message+' — voer supabase-schema.sql één keer uit in Supabase SQL Editor.')}}
 function parseDateNL(s){const m=String(s||'').match(/(\d{2})-(\d{2})-(\d{4})/); if(!m)return null; return {d:+m[1],m:+m[2],y:+m[3]}}
 function inSelectedPeriod(r){const dt=parseDateNL(r.datum); if(!dt) return true; const year=+(document.getElementById('periodYear')?.value||dt.y); if(dt.y!==year) return false; const mode=document.getElementById('periodMode')?.value||'all'; const part=+(document.getElementById('periodPart')?.value||1); if(mode==='month') return dt.m===part; if(mode==='quarter') return Math.ceil(dt.m/3)===part; if(mode==='half') return (dt.m<=6?1:2)===part; return true}
 function filteredRows(){return rows.filter(inSelectedPeriod)}
@@ -82,7 +96,7 @@ function updatePeriodParts(){const mode=document.getElementById('periodMode')?.v
 async function pdfText(file){const buf=await file.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:buf}).promise; let txt=''; for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i); const content=await page.getTextContent(); txt += content.items.map(x=>x.str).join(' ')+'\n'} return txt}
 function categoryForVeldoffice(){return 'Handmatig'}
 function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('aveco')) return 'Aveco de Bondt'; if(l.includes('antea')) return 'Antea'; if(l.includes('aps')) return 'APS'; if(l.includes('socotec')) return 'Socotec'; if(l.includes('hb advies')||l.includes('hb advies-')) return 'HB Advies'; if(l.includes('grs')) return 'GRS'; if(l.includes('rik stikker')||l.includes('stikker')) return 'Rik Stikker'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
-function addRow(r){rows.push({...r,id:uid()})}
+function addRow(r){rows.push(touchRow({...r,id:uid()}))}
 function parseVeldoffice(text,file){
   if(!/VERZAMELFACTUUR/i.test(text) || !/VERBRUIKSARTIKELEN/i.test(text)) return 0;
   // Robuuste aanpak: niet gokken op projectcode-formaten in de verzameltabel.
@@ -130,16 +144,17 @@ function groupSum(list,key){const m={}; list.forEach(r=>{const k=(r[key]||'Onbek
 function summaryTable(entries){if(!entries.length)return '<div class="muted">Geen regels in deze periode.</div>'; return '<table><thead><tr><th>Naam</th><th>Omzet</th></tr></thead><tbody>'+entries.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${money(v)}</td></tr>`).join('')+'</tbody></table>'}
 function stats(){const list=filteredRows(); const total=list.reduce((a,r)=>a+(Number(r.bedrag)||0),0); const hand=list.filter(r=>r.afdeling==='Handmatig').reduce((a,r)=>a+(Number(r.bedrag)||0),0); const mach=list.filter(r=>r.afdeling==='Machinaal').reduce((a,r)=>a+(Number(r.bedrag)||0),0); document.getElementById('stats').innerHTML=`<div class="stat"><b>${list.length}</b><span>regels in selectie</span></div><div class="stat"><b>${money(total)}</b><span>totaal</span></div><div class="stat"><b>${money(hand)}</b><span>handmatig</span></div><div class="stat"><b>${money(mach)}</b><span>machinaal</span></div>`; document.getElementById('byClient').innerHTML=summaryTable(groupSum(list,'blok')); document.getElementById('byCategory').innerHTML=summaryTable(groupSum(list,'categorie'))}
 function render(){tbody.innerHTML=''; rows.forEach((r,i)=>{const tr=document.createElement('tr'); const pill=r.status==='OK'?'<span class="pill ok">OK</span>':'<span class="pill warn">Controle</span>'; tr.innerHTML=`<td>${pill}</td><td><select data-i="${i}" data-k="afdeling"><option></option><option ${r.afdeling==='Handmatig'?'selected':''}>Handmatig</option><option ${r.afdeling==='Machinaal'?'selected':''}>Machinaal</option></select></td><td><select data-i="${i}" data-k="categorie"><option ${r.categorie==='Handmatig'?'selected':''}>Handmatig</option><option ${r.categorie==='Sonic'?'selected':''}>Sonic</option><option ${r.categorie==='Spoelboren'?'selected':''}>Spoelboren</option><option ${r.categorie==='Controle nodig'?'selected':''}>Controle nodig</option></select></td><td>${r.bron}</td><td><input class="cell" data-i="${i}" data-k="blok" value="${esc(r.blok)}"></td><td><input class="cell" data-i="${i}" data-k="project" value="${esc(r.project)}"></td><td><input class="cell" data-i="${i}" data-k="naam" value="${esc(r.naam)}"></td><td><input class="cell" data-i="${i}" data-k="datum" value="${esc(r.datum)}"></td><td class="num"><input class="cell" data-i="${i}" data-k="bedrag" value="${r.bedrag}" style="text-align:right"></td><td><input class="cell" data-i="${i}" data-k="opmerking" value="${esc(r.opmerking)}"></td><td>${esc(r.bestand)}</td><td><button class="small-btn danger-link" data-del="${i}">Verwijder</button></td>`; tbody.appendChild(tr)}); document.getElementById('exportBtn').disabled=!rows.length; stats()}
-document.body.addEventListener('input',e=>{const t=e.target;if(t.dataset.i){let v=t.value;if(t.dataset.k==='bedrag')v=euroToNum(v); rows[+t.dataset.i][t.dataset.k]=v; saveRows(); stats()}}); document.body.addEventListener('change',e=>{const t=e.target;if(t.dataset.i){rows[+t.dataset.i][t.dataset.k]=t.value; saveRows(); stats()}})
-document.body.addEventListener('click',e=>{const b=e.target.closest('[data-del]'); if(!b)return; const i=+b.dataset.del; const r=rows[i]; if(confirm('Deze regel verwijderen?\n'+(r.project||'')+' '+money(r.bedrag))){rows.splice(i,1); saveRows(); render(); log('Regel verwijderd.')}})
+document.body.addEventListener('input',e=>{const t=e.target;if(t.dataset.i){let v=t.value;if(t.dataset.k==='bedrag')v=euroToNum(v); rows[+t.dataset.i][t.dataset.k]=v; touchRow(rows[+t.dataset.i]); saveRows(); stats()}}); document.body.addEventListener('change',e=>{const t=e.target;if(t.dataset.i){rows[+t.dataset.i][t.dataset.k]=t.value; touchRow(rows[+t.dataset.i]); saveRows(); stats()}})
+document.body.addEventListener('click',e=>{const b=e.target.closest('[data-del]'); if(!b)return; const i=+b.dataset.del; const r=rows[i]; if(confirm('Deze regel verwijderen?\n'+(r.project||'')+' '+money(r.bedrag))){rows.splice(i,1); saveRows(); render(); if(cloudReady&&sb) sb.from(CLOUD_TABLE).delete().eq('id',r.id).then(({error})=>{if(error)log('Cloud verwijderen mislukt: '+error.message)}); log('Regel verwijderd.')}})
 ;['periodMode','periodYear','periodPart'].forEach(id=>document.getElementById(id)?.addEventListener('change',()=>{if(id==='periodMode')updatePeriodParts(); stats()})); updatePeriodParts();
 document.getElementById('fileInput').addEventListener('change',e=>handleFiles(e.target.files)); const drop=document.getElementById('drop'); drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag')}); drop.addEventListener('dragleave',()=>drop.classList.remove('drag')); drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');handleFiles(e.dataTransfer.files)});
-document.getElementById('clearBtn').onclick=()=>{if(confirm('Alle opgeslagen regels wissen?')){rows.length=0;saveRows();render();logEl.textContent='Alles gewist.'}};
+document.getElementById('clearBtn').onclick=()=>{if(confirm('Alle opgeslagen regels wissen? Dit wist ook de cloudlijst.')){rows.length=0;saveRows();render();logEl.textContent='Alles gewist.'; if(cloudReady&&sb) sb.from(CLOUD_TABLE).delete().neq('id','__never__').then(({error})=>{if(error)log('Cloud wissen mislukt: '+error.message); else setCloudStatus('Cloud: gewist')});}};
+document.getElementById('syncBtn').onclick=()=>initCloud();
 document.getElementById('exportBtn').onclick=()=>{const data=filteredRows().map(r=>({'Afdeling':r.afdeling,'Categorie voorstel':r.categorie,'Bron':r.bron,'Opdrachtgever/blok':r.blok,'Projectcode':r.project,'Project/naam':r.naam,'Datum':r.datum,'Bedrag ex btw':Number(r.bedrag)||0,'Opmerking':r.opmerking,'Bestand':r.bestand,'Status':r.status})); const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Omzet import'); XLSX.writeFile(wb,'omzet-import-'+new Date().toISOString().slice(0,10)+'.xlsx')};
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => null));
 }
-loadRows(); render();
+loadRows(); render(); initCloud();
 </script>
 </body>
 </html>
