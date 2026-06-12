@@ -78,7 +78,7 @@ function blockFromText(t){const l=t.toLowerCase(); if(l.includes('arcadis')) ret
 function addRow(r){rows.push({...r,id:uid()})}
 function parseVeldoffice(text,file){
   const summary=text.split('VERBRUIKSARTIKELEN')[0]||'';
-  const code='(?:PB-\\d{2}-\\d{5}|\\d{4,12}(?:\\.\\d{1,6})?|[A-Z]{1,6}\\d{0,6}(?:[- ][A-Z]{0,6}\\d{2,12})?(?:\\.\\d{1,6})?)';
+  const code='(?:PB-\\d{2}-\\d{5}|\\d{4,12}(?:[-.]\\d{1,6})?|[A-Z]{1,6}\\d{0,6}(?:[- ][A-Z]{0,6}\\d{2,12})?(?:[-.]\\d{1,6})?)';
   const re=new RegExp('([^\\n]+?)\\s+('+code+')\\s+€\\s*([\\d.]+,\\d{2})','g');
   let m,count=0; const details=text.split('VERBRUIKSARTIKELEN').slice(1);
   while((m=re.exec(summary))){
