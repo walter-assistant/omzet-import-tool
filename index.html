@@ -99,7 +99,12 @@ async function syncToCloud(){if(!cloudReady||!sb||!rows.length)return; try{setCl
 function mergeCloudRows(cloudRows){const byId=new Map(rows.map(r=>[r.id,r])); for(const c of cloudRows||[]){const fixed=repairRow({...c,bedrag:amountVal(c.bedrag)}); const local=byId.get(c.id); if(!local){rows.push(fixed); continue;} const lt=new Date(local.updated_at||0).getTime(); const ct=new Date(c.updated_at||0).getTime(); if(ct>lt) Object.assign(local,fixed);} rows.sort((a,b)=>String(a.datum||'').localeCompare(String(b.datum||''))||String(a.blok||'').localeCompare(String(b.blok||'')))}
 async function initCloud(){try{if(!window.supabase){setCloudStatus('Cloud: bibliotheek ontbreekt');return;} sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY); cloudLoading=true; setCloudStatus('Cloud: laden...'); const {data,error}=await sb.from(CLOUD_TABLE).select('*').order('created_at',{ascending:true}); if(error) throw error; mergeCloudRows(data||[]); cloudReady=true; cloudLoading=false; saveRows(); render(); setCloudStatus('Cloud: actief'); log('Cloud geladen: '+(data||[]).length+' regels.')}catch(e){cloudReady=false; cloudLoading=false; setCloudStatus('Cloud: niet actief'); log('Cloud nog niet actief: '+e.message+' — voer supabase-schema.sql één keer uit in Supabase SQL Editor.')}}
 function parseDateNL(s){const m=String(s||'').match(/(\d{2})-(\d{2})-(\d{4})/); if(!m)return null; return {d:+m[1],m:+m[2],y:+m[3]}}
-function inSelectedPeriod(r){const dt=parseDateNL(r.datum); if(!dt) return true; const year=+(document.getElementById('periodYear')?.value||dt.y); if(dt.y!==year) return false; const mode=document.getElementById('periodMode')?.value||'all'; const part=+(document.getElementById('periodPart')?.value||1); if(mode==='month') return dt.m===part; if(mode==='quarter') return Math.ceil(dt.m/3)===part; if(mode==='half') return (dt.m<=6?1:2)===part; return true}
+function dateFromTextOrFile(text,file){
+  const src=[file?.name||'', text||''].join(' ');
+  const m=src.match(/(\d{2}-\d{2}-\d{4})/);
+  return m?m[1]:'';
+}
+function inSelectedPeriod(r){const mode=document.getElementById('periodMode')?.value||'all'; const dt=parseDateNL(r.datum); if(!dt) return mode==='all'; const year=+(document.getElementById('periodYear')?.value||dt.y); if(dt.y!==year) return false; const part=+(document.getElementById('periodPart')?.value||1); if(mode==='month') return dt.m===part; if(mode==='quarter') return Math.ceil(dt.m/3)===part; if(mode==='half') return (dt.m<=6?1:2)===part; return true}
 function filteredRows(){return rows.filter(inSelectedPeriod)}
 function updatePeriodParts(){const mode=document.getElementById('periodMode')?.value||'all'; const part=document.getElementById('periodPart'); if(!part)return; const old=part.value; let opts=[]; if(mode==='all') opts=[['1','Heel jaar']]; if(mode==='month') opts=['Januari','Februari','Maart','April','Mei','Juni','Juli','Augustus','September','Oktober','November','December'].map((m,i)=>[String(i+1),m]); if(mode==='quarter') opts=[['1','Q1'],['2','Q2'],['3','Q3'],['4','Q4']]; if(mode==='half') opts=[['1','H1'],['2','H2']]; part.innerHTML=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join(''); if([...part.options].some(o=>o.value===old)) part.value=old}
 async function pdfText(file){const buf=await file.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:buf}).promise; let txt=''; for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i); const content=await page.getTextContent(); txt += content.items.map(x=>x.str).join(' ')+'\n'} return txt}
@@ -108,11 +113,18 @@ function blockFromText(t){const l=String(t||'').toLowerCase(); if(l.includes('sw
 function repairRow(r){
   r.bedrag=amountVal(r.bedrag);
   if(!String(r.blok||'').trim()) r.blok=blockFromText([r.opmerking,r.bestand,r.naam,r.project].join(' '));
+  // Veldoffice verzamelfacturen: voor omzetperiode gebruiken we de factuur-/bestandsdatum,
+  // niet de projectdatum uit het detailblok. Anders valt bv. Sweco 19-05-2026 weg als 07-04-2025.
+  const invoiceDate=dateFromTextOrFile('',{name:r.bestand||''});
+  if(r.bron==='Veldoffice' && invoiceDate) r.datum=invoiceDate;
   return r;
 }
 function addRow(r){rows.push(touchRow(repairRow({...r,id:uid()}))) }
 function parseVeldoffice(text,file){
   if(!/VERZAMELFACTUUR/i.test(text) || !/VERBRUIKSARTIKELEN/i.test(text)) return 0;
+  // Voor omzetoverzicht telt de verzamelfactuurdatum/bestandsdatum.
+  // De datum in detailblokken is soms projectdatum en kan zelfs in een ander jaar vallen.
+  const invoiceDate=dateFromTextOrFile(text,file);
   // Robuuste aanpak: niet gokken op projectcode-formaten in de verzameltabel.
   // Veldoffice detailblokken bevatten altijd Projectnummer / Naam onderzoek / Datum / Totaal.
   const sections=text.split('VERBRUIKSARTIKELEN').slice(1);
@@ -120,7 +132,7 @@ function parseVeldoffice(text,file){
   for(const sec of sections){
     const project=pick(/Projectnummer:\s*(.*?)\s+Naam onderzoek:/,sec);
     const naam=pick(/Naam onderzoek:\s*(.*?)\s+Datum:/,sec);
-    const datum=pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/,sec);
+    const datum=invoiceDate || pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/,sec);
     const opm=pick(/Opmerking:\s*(.*?)\s+Projectleider:/,sec);
     const bedrag=euroToNum(pick(/Totaal:\D*([\d.]+,\d{2})/,sec));
     if(!project && !naam && !bedrag) continue;
