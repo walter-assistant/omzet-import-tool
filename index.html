@@ -164,8 +164,34 @@ function parseInkooporder(text,file){
   addRow({status:bedrag?'OK':'Controle nodig',afdeling:'Machinaal',categorie:'Sonic',bron:'Inkooporder',blok:blockFromText(one)||'Eco-Well',project:contract||projectnummer,naam:project,datum,bedrag,opmerking:opm,bestand:file.name});
   return 1;
 }
+function parseWerkbon(text,file){
+  if(!/Werkbon\s*\/\s*Pre-factuur/i.test(text) || !/Offertebedrag:/i.test(text)) return 0;
+  const one=norm(text);
+  const bedrijf=pick(/Bedrijf:\s*(.*?)(?=\s+Contactpersoon:)/i,one) || pick(/Bedrijf:\s*(.*?)(?=\s+Projectnummer klant:)/i,one);
+  const klantProject=pick(/Projectnummer klant:\s*(.*?)(?=\s+Kenmerk:)/i,one);
+  const kenmerk=pick(/Kenmerk:\s*([^\s]+)/i,one);
+  const datum=pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/i,one);
+  const werkzaamheden=pick(/Werkzaamheden:\s*(.*?)(?=\s+Specificatie kosten)/i,one);
+  const bedrag=euroToNum(pick(/Offertebedrag:\D*([\d.]+,\d{2})/i,one));
+  const isSonic=/\bsonic\b/i.test(one);
+  const isSpoel=/spoelbor/i.test(one);
+  addRow({
+    status:bedrag?'OK':'Controle nodig',
+    afdeling:isSonic||isSpoel?'Machinaal':'Handmatig',
+    categorie:isSonic?'Sonic':(isSpoel?'Spoelboren':'Handmatig'),
+    bron:'Werkbon',
+    blok:bedrijf||blockFromText(one),
+    project:kenmerk,
+    naam:klantProject,
+    datum,
+    bedrag,
+    opmerking:werkzaamheden,
+    bestand:file.name
+  });
+  return 1;
+}
 function addUnknown(file){addRow({status:'Controle nodig',afdeling:'',categorie:'Controle nodig',bron:'Onbekend',blok:'',project:'',naam:'',datum:'',bedrag:0,opmerking:'PDF-type nog niet herkend',bestand:file.name})}
-async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const before=rows.length; const text=await pdfText(file); let n=parseInkooporder(text,file); if(!n)n=parseVeldoffice(text,file); if(!n)addUnknown(file); log('Gevonden regels: '+(rows.length-before));}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render(); saveRows()}
+async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const before=rows.length; const text=await pdfText(file); let n=parseWerkbon(text,file); if(!n)n=parseInkooporder(text,file); if(!n)n=parseVeldoffice(text,file); if(!n)addUnknown(file); log('Gevonden regels: '+(rows.length-before));}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render(); saveRows()}
 function groupSum(list,key){const m={}; list.forEach(r=>{const k=(r[key]||'Onbekend').trim()||'Onbekend'; m[k]=(m[k]||0)+amountVal(r.bedrag)}); return Object.entries(m).sort((a,b)=>b[1]-a[1])}
 function summaryTable(entries){if(!entries.length)return '<div class="muted">Geen regels in deze periode.</div>'; return '<table><thead><tr><th>Naam</th><th>Omzet</th></tr></thead><tbody>'+entries.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${money(v)}</td></tr>`).join('')+'</tbody></table>'}
 function stats(){const list=filteredRows(); const total=list.reduce((a,r)=>a+amountVal(r.bedrag),0); const hand=list.filter(r=>r.afdeling==='Handmatig').reduce((a,r)=>a+amountVal(r.bedrag),0); const mach=list.filter(r=>r.afdeling==='Machinaal').reduce((a,r)=>a+amountVal(r.bedrag),0); document.getElementById('stats').innerHTML=`<div class="stat"><b>${list.length}</b><span>regels in selectie</span></div><div class="stat"><b>${money(total)}</b><span>totaal</span></div><div class="stat"><b>${money(hand)}</b><span>handmatig</span></div><div class="stat"><b>${money(mach)}</b><span>machinaal</span></div>`; document.getElementById('byClient').innerHTML=summaryTable(groupSum(list,'blok')); document.getElementById('byCategory').innerHTML=summaryTable(groupSum(list,'categorie'))}
