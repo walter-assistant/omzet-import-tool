@@ -117,9 +117,17 @@ function updatePeriodParts(){const mode=document.getElementById('periodMode')?.v
 async function pdfText(file){const buf=await file.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:buf}).promise; let txt=''; for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i); const content=await page.getTextContent(); txt += content.items.map(x=>x.str).join(' ')+'\n'} return txt}
 function categoryForVeldoffice(){return 'Handmatig'}
 function blockFromText(t){const l=String(t||'').toLowerCase(); if(l.includes('sweco')) return 'Sweco'; if(l.includes('arcadis')) return 'Arcadis P/E'; if(l.includes('aveco')) return 'Aveco de Bondt'; if(l.includes('antea')) return 'Antea'; if(l.includes('aps')) return 'APS'; if(l.includes('socotec')) return 'Socotec'; if(l.includes('hb advies')||l.includes('hb advies-')) return 'HB Advies'; if(l.includes('grs')) return 'GRS'; if(l.includes('rik stikker')||l.includes('stikker')) return 'Rik Stikker'; if(l.includes('eco-well')) return 'Eco-Well'; return ''}
+function categoryToAfdeling(categorie,afdeling){
+  const c=norm(categorie);
+  if(c==='Sonic'||c==='Spoelboren') return 'Machinaal';
+  if(c==='Handmatig') return 'Handmatig';
+  return afdeling||'';
+}
 function repairRow(r){
   r.bedrag=amountVal(r.bedrag);
   if(!String(r.blok||'').trim()) r.blok=blockFromText([r.opmerking,r.bestand,r.naam,r.project].join(' '));
+  if(!String(r.categorie||'').trim()) r.categorie=r.afdeling==='Machinaal'?'Sonic':'Handmatig';
+  r.afdeling=categoryToAfdeling(r.categorie,r.afdeling);
   // Veldoffice verzamelfacturen: voor omzetperiode gebruiken we de factuur-/bestandsdatum,
   // niet de projectdatum uit het detailblok. Anders valt bv. Sweco 19-05-2026 weg als 07-04-2025.
   const invoiceDate=dateFromTextOrFile('',{name:r.bestand||''});
@@ -173,14 +181,78 @@ function parseInkooporder(text,file){
   return 1;
 }
 function parseWerkbon(text,file){
-  if(!/Werkbon\s*\/\s*Pre-factuur/i.test(text) || !/Offertebedrag:/i.test(text)) return 0;
   const one=norm(text);
-  const bedrijf=pick(/Bedrijf:\s*(.*?)(?=\s+Contactpersoon:)/i,one) || pick(/Bedrijf:\s*(.*?)(?=\s+Projectnummer klant:)/i,one);
-  const klantProject=pick(/Projectnummer klant:\s*(.*?)(?=\s+Kenmerk:)/i,one);
-  const kenmerk=pick(/Kenmerk:\s*([^\s]+)/i,one);
-  const datum=pick(/Datum:\s*(\d{2}-\d{2}-\d{4})/i,one);
-  const werkzaamheden=pick(/Werkzaamheden:\s*(.*?)(?=\s+Specificatie kosten)/i,one);
-  const bedrag=euroToNum(pick(/Offertebedrag:\D*([\d.]+,\d{2})/i,one));
+  const isWerkbon=/Werkbon\s*(?:\/\s*Pre-factuur|voor\s+facturatie)/i.test(one) || /Werkzaamheden\s*:/i.test(one)&&/Totale kosten/i.test(one)&&/Factuur mailen naar/i.test(one);
+  const lbl = name => new RegExp(name + '\\s*:\\s*', 'i');
+  if(!isWerkbon) return 0;
+
+  // BoorApp kent inmiddels meerdere PDF varianten:
+  // - oud: Bedrijf / Kenmerk / Offertebedrag:
+  // - compact: Werkbon voor facturatie / Totale kosten / Geoffreerd bedrag
+  // - nieuw: Opdrachtgever / Projectnummer / Datum yyyy-mm-dd / Offertebedrag zonder dubbele punt.
+  const bedrijf=pick(/Bedrijf\s*:\s*(.*?)(?=\s+Contactpersoon\s*:)/i,one) ||
+    pick(/Bedrijf\s*:\s*(.*?)(?=\s+Projectnummer klant\s*:)/i,one) ||
+    pick(/Opdrachtgever\s*:\s*(.*?)(?=\s+Projectnummer\s*:)/i,one);
+  const klantProject=pick(/Projectnummer klant\s*:\s*(.*?)(?=\s+Kenmerk\s*:)/i,one) ||
+    pick(/Locatie\s*:\s*(.*?)(?=\s+Betreft\s*:)/i,one);
+  let kenmerk=pick(/Kenmerk\s*:\s*([^\s]+)/i,one) || pick(/Projectnummer\s*:\s*([^\s]+)/i,one);
+  if(!kenmerk) kenmerk=pick(/\b(GR\d{3}-\d{4}-\d{3})\b/i,one);
+  if(!kenmerk) kenmerk=pick(/\b(\d{2}-\d{4}-\d{3})\b/i,one);
+
+  let datum=pick(/Datum\s*:\s*(\d{1,2}-\d{1,2}-\d{4}|\d{4}-\d{1,2}-\d{1,2})/i,one);
+  if(!datum){
+    let dm=one.match(/\b(\d{1,2})-(\d{1,2})-(\d{4})\b/);
+    if(dm) datum=dm[1].padStart(2,'0')+'-'+dm[2].padStart(2,'0')+'-'+dm[3];
+    else { dm=one.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/); if(dm) datum=dm[3].padStart(2,'0')+'-'+dm[2].padStart(2,'0')+'-'+dm[1]; }
+  }else{
+    let dm=datum.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    if(dm) datum=dm[1].padStart(2,'0')+'-'+dm[2].padStart(2,'0')+'-'+dm[3];
+    else { dm=datum.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/); if(dm) datum=dm[3].padStart(2,'0')+'-'+dm[2].padStart(2,'0')+'-'+dm[1]; }
+  }
+
+  let werkzaamheden=pick(/Werkzaamheden\s*:\s*(.*?)(?=\s+Specificatie kosten)/i,one) ||
+    pick(/Werkzaamheden\s*:\s*(.*?)(?=\s+(?:Werkbon voor facturatie|Geoffreerd bedrag|Factuur\s*:|Diepte per boring))/i,one) ||
+    pick(/Betreft\s*:\s*(.*?)(?=\s+Uitgevoerde boringen|\s+Facturatie)/i,one);
+  if(!werkzaamheden || /^Werkbon voor facturatie/i.test(werkzaamheden)){
+    const afterDate=one.match(/\b\d{1,2}-\d{1,2}-\d{4}\s+(.+)$/);
+    if(afterDate) werkzaamheden=norm(afterDate[1]);
+  }
+  if((!werkzaamheden || werkzaamheden.length>90) && /Boring voor bodemenergiesysteem/i.test(one)) werkzaamheden='Boring voor bodemenergiesysteem';
+
+  // Voor omzet telt ex btw. Pak daarom bij voorkeur "Totale kosten" ex btw, anders Offertebedrag/Geoffreerd bedrag.
+  // Sommige oude werkbonnen tonen alleen een losse totaalregel: "Totaal € 7.240,00".
+  let bedrag=euroToNum(pick(/Totale kosten\D*([\d.]+,\d{2})/i,one));
+  if(!bedrag) bedrag=euroToNum(pick(/Offertebedrag\D*([\d.]+,\d{2})/i,one));
+  if(!bedrag) bedrag=euroToNum(pick(/Geoffreerd bedrag\D*([\d.]+,\d{2})/i,one));
+  if(!bedrag) bedrag=euroToNum(pick(/:\D*([\d.]+,\d{2})\s+Ex BTW/i,one));
+  if(!bedrag) bedrag=euroToNum(pick(/\bTotaal\D*([\d.]+,\d{2})/i,one));
+
+  let naam=klantProject;
+  if(!naam) naam=pick(/per stuk\s+(.*?)\s+\d{1,2}-\d{1,2}-\d{4}\s+Boringen/i,one);
+  if(!naam) naam=pick(/\b(?:GPS Meting|Klic melding)\b.*?\s+([A-Z][^€]+?)\s+\d{1,2}-\d{1,2}-\d{4}\s+Boringen/i,one);
+  let blok=bedrijf||blockFromText(one);
+  if(blok&&/\s+T\.a\.v\./i.test(blok)) blok=norm(blok.split(/\s+T\.a\.v\./i)[0]);
+  if(!blok){
+    // Compacte werkbon: haal klant uit factuurmail indien mogelijk, anders uit tekst vóór Kenmerk.
+    const beforeKenmerk=one.split(/\s+Kenmerk\s*:/i)[0]||'';
+    const mail=pick(/Factuur mailen naar:\s*([^\s]+)/i,one);
+    const mailName=mail&&mail.indexOf('@')>-1?mail.split('@')[0].split(/[._-]+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(' '):'';
+    if(mailName) blok=mailName;
+    else {
+      const parts=beforeKenmerk.split(' ');
+      blok=norm(parts.slice(0,2).join(' '));
+    }
+  }
+  if(!naam){
+    const beforeKenmerk=one.split(/\s+Kenmerk\s*:/i)[0]||'';
+    naam=norm(beforeKenmerk.replace(new RegExp('^'+blok.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*','i'),''));
+  }
+
+  if(!werkzaamheden || werkzaamheden.length>120 || /^Werkbon voor facturatie/i.test(werkzaamheden)) {
+    const meerwerk=pick(/Meerwerk\s+(.*?)(?=\s+Totaal\b)/i,one);
+    werkzaamheden='Werkbon voor facturatie' + (meerwerk ? ' - Meerwerk ' + meerwerk : '');
+  }
+
   const isSonic=/\bsonic\b/i.test(one);
   const isSpoel=/spoelbor/i.test(one);
   addRow({
@@ -188,9 +260,9 @@ function parseWerkbon(text,file){
     afdeling:isSonic||isSpoel?'Machinaal':'Handmatig',
     categorie:isSonic?'Sonic':(isSpoel?'Spoelboren':'Handmatig'),
     bron:'Werkbon',
-    blok:bedrijf||blockFromText(one),
+    blok,
     project:kenmerk,
-    naam:klantProject,
+    naam,
     datum,
     bedrag,
     opmerking:werkzaamheden,
@@ -199,16 +271,16 @@ function parseWerkbon(text,file){
   return 1;
 }
 function addUnknown(file){addRow({status:'Controle nodig',afdeling:'',categorie:'Controle nodig',bron:'Onbekend',blok:'',project:'',naam:'',datum:'',bedrag:0,opmerking:'PDF-type nog niet herkend',bestand:file.name})}
-async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const before=rows.length; const text=await pdfText(file); let n=parseWerkbon(text,file); if(!n)n=parseInkooporder(text,file); if(!n)n=parseVeldoffice(text,file); if(!n)addUnknown(file); log('Gevonden regels: '+(rows.length-before));}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render(); saveRows()}
+async function handleFiles(files){for(const file of files){try{log('Lees '+file.name); const before=rows.length; const text=await pdfText(file); let n=parseWerkbon(text,file); if(!n)n=parseInkooporder(text,file); if(!n)n=parseVeldoffice(text,file); if(!n)addUnknown(file); const added=rows.slice(before); log('Gevonden regels: '+added.length); if(added.length&&added.every(r=>!inSelectedPeriod(r))){log('Let op: geïmporteerd, maar niet zichtbaar door huidige periodefilter. Zet Basis/Jaar/Periode ruimer om deze regel te zien. Datum: '+added.map(r=>r.datum||'-').join(', '));}}catch(e){log('Fout bij '+file.name+': '+e.message); addUnknown(file)}} render(); saveRows()}
 function duplicateKey(r){const bedrag=Math.round(amountVal(r.bedrag)*100); const ref=norm(r.project||r.naam||'').toLowerCase(); if(!ref||bedrag<=0)return ''; return [norm(r.bron).toLowerCase(),norm(r.blok).toLowerCase(),ref,norm(r.datum).toLowerCase(),bedrag].join('|')}
 function duplicateIds(list=rows){const groups=new Map(); list.forEach(r=>{const k=duplicateKey(r); if(!k)return; if(!groups.has(k))groups.set(k,[]); groups.get(k).push(r.id)}); const ids=new Set(); groups.forEach(arr=>{if(arr.length>1)arr.forEach(id=>ids.add(id))}); return ids}
 function duplicateExtraCount(list=rows){const groups=new Map(); list.forEach(r=>{const k=duplicateKey(r); if(!k)return; groups.set(k,(groups.get(k)||0)+1)}); let n=0; groups.forEach(c=>{if(c>1)n+=c-1}); return n}
 function duplicateCopyRows(list=rows){const groups=new Map(); list.forEach(r=>{const k=duplicateKey(r); if(!k)return; if(!groups.has(k))groups.set(k,[]); groups.get(k).push(r)}); const del=[]; groups.forEach(arr=>{if(arr.length>1)arr.slice(1).forEach(r=>del.push(r))}); return del}
 function groupSum(list,key){const m={}; list.forEach(r=>{const k=(r[key]||'Onbekend').trim()||'Onbekend'; m[k]=(m[k]||0)+amountVal(r.bedrag)}); return Object.entries(m).sort((a,b)=>b[1]-a[1])}
 function summaryTable(entries){if(!entries.length)return '<div class="muted">Geen regels in deze periode.</div>'; return '<table><thead><tr><th>Naam</th><th>Omzet</th></tr></thead><tbody>'+entries.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${money(v)}</td></tr>`).join('')+'</tbody></table>'}
-function stats(){const list=filteredRows(); const total=list.reduce((a,r)=>a+amountVal(r.bedrag),0); const hand=list.filter(r=>r.afdeling==='Handmatig').reduce((a,r)=>a+amountVal(r.bedrag),0); const mach=list.filter(r=>r.afdeling==='Machinaal').reduce((a,r)=>a+amountVal(r.bedrag),0); const dup=duplicateExtraCount(list); document.getElementById('stats').innerHTML=`<div class="stat"><b>${list.length}</b><span>regels in selectie</span></div><div class="stat"><b>${money(total)}</b><span>totaal</span></div><div class="stat"><b>${money(hand)}</b><span>handmatig</span></div><div class="stat"><b>${money(mach)}</b><span>machinaal</span></div><div class="stat"><b>${dup}</b><span>mogelijke dubbelen</span></div>`; document.getElementById('byClient').innerHTML=summaryTable(groupSum(list,'blok')); document.getElementById('byCategory').innerHTML=summaryTable(groupSum(list,'categorie'))}
+function stats(){const list=filteredRows().map(r=>repairRow(r)); const total=list.reduce((a,r)=>a+amountVal(r.bedrag),0); const hand=list.filter(r=>r.afdeling==='Handmatig').reduce((a,r)=>a+amountVal(r.bedrag),0); const mach=list.filter(r=>r.afdeling==='Machinaal').reduce((a,r)=>a+amountVal(r.bedrag),0); const dup=duplicateExtraCount(list); document.getElementById('stats').innerHTML=`<div class="stat"><b>${list.length}</b><span>regels in selectie</span></div><div class="stat"><b>${money(total)}</b><span>totaal</span></div><div class="stat"><b>${money(hand)}</b><span>afd. handmatig</span></div><div class="stat"><b>${money(mach)}</b><span>afd. machinaal</span></div><div class="stat"><b>${dup}</b><span>mogelijke dubbelen</span></div>`; document.getElementById('byClient').innerHTML=summaryTable(groupSum(list,'blok')); document.getElementById('byCategory').innerHTML=summaryTable(groupSum(list,'categorie'))}
 function render(){tbody.innerHTML=''; const dupIds=duplicateIds(rows); const list=rows.map((r,i)=>({r,i})).filter(x=>inSelectedPeriod(x.r)); list.forEach(({r,i})=>{const tr=document.createElement('tr'); const isDup=dupIds.has(r.id); if(isDup) tr.style.background='#fff7ed'; const pill=isDup?'<span class="pill warn">Mogelijk dubbel</span>':(r.status==='OK'?'<span class="pill ok">OK</span>':'<span class="pill warn">Controle</span>'); const dt=parseDateNL(r.datum); tr.innerHTML=`<td>${pill}</td><td><select data-i="${i}" data-k="afdeling"><option></option><option ${r.afdeling==='Handmatig'?'selected':''}>Handmatig</option><option ${r.afdeling==='Machinaal'?'selected':''}>Machinaal</option></select></td><td><select data-i="${i}" data-k="categorie"><option ${r.categorie==='Handmatig'?'selected':''}>Handmatig</option><option ${r.categorie==='Sonic'?'selected':''}>Sonic</option><option ${r.categorie==='Spoelboren'?'selected':''}>Spoelboren</option><option ${r.categorie==='Controle nodig'?'selected':''}>Controle nodig</option></select></td><td>${r.bron}</td><td><input class="cell" data-i="${i}" data-k="blok" value="${esc(r.blok)}"></td><td><input class="cell" data-i="${i}" data-k="project" value="${esc(r.project)}"></td><td><input class="cell" data-i="${i}" data-k="naam" value="${esc(r.naam)}"></td><td><input class="cell" data-i="${i}" data-k="datum" value="${esc(r.datum)}"><select class="cell" data-i="${i}" data-k="datumMonth" style="margin-top:4px">${monthOptions(dt?.m||0)}</select></td><td class="num"><input class="cell" data-i="${i}" data-k="bedrag" value="${r.bedrag}" style="text-align:right"></td><td><input class="cell" data-i="${i}" data-k="opmerking" value="${esc(r.opmerking)}"></td><td>${esc(r.bestand)}</td><td><button class="small-btn danger-link" data-del="${i}">Verwijder</button></td>`; tbody.appendChild(tr)}); document.getElementById('exportBtn').disabled=!filteredRows().length; stats()}
-document.body.addEventListener('input',e=>{const t=e.target;if(t.dataset.i&&t.dataset.k!=='datumMonth'){let v=t.value;if(t.dataset.k==='bedrag')v=euroToNum(v); rows[+t.dataset.i][t.dataset.k]=v; touchRow(rows[+t.dataset.i]); saveRows(); stats()}}); document.body.addEventListener('change',e=>{const t=e.target;if(t.dataset.i){const r=rows[+t.dataset.i]; if(t.dataset.k==='datumMonth'){r.datum=moveDateToMonth(r.datum,t.value)} else {r[t.dataset.k]=t.value} touchRow(r); saveRows(); render()}})
+document.body.addEventListener('input',e=>{const t=e.target;if(t.dataset.i&&t.dataset.k!=='datumMonth'){let v=t.value;if(t.dataset.k==='bedrag')v=euroToNum(v); rows[+t.dataset.i][t.dataset.k]=v; repairRow(rows[+t.dataset.i]); touchRow(rows[+t.dataset.i]); saveRows(); stats()}}); document.body.addEventListener('change',e=>{const t=e.target;if(t.dataset.i){const r=rows[+t.dataset.i]; if(t.dataset.k==='datumMonth'){r.datum=moveDateToMonth(r.datum,t.value)} else {r[t.dataset.k]=t.value; if(t.dataset.k==='categorie') r.afdeling=categoryToAfdeling(r.categorie,r.afdeling)} repairRow(r); touchRow(r); saveRows(); render()}})
 document.body.addEventListener('click',e=>{const b=e.target.closest('[data-del]'); if(!b)return; const i=+b.dataset.del; const r=rows[i]; if(confirm('Deze regel verwijderen?\n'+(r.project||'')+' '+money(r.bedrag))){markDeleted(r.id); rows.splice(i,1); saveRows(); render(); if(cloudReady&&sb) syncDeletedToCloud(); log('Regel verwijderd en gemarkeerd voor cloud-verwijdering.')}})
 ;['periodMode','periodYear','periodPart'].forEach(id=>document.getElementById(id)?.addEventListener('change',()=>{if(id==='periodMode')updatePeriodParts(); render()})); updatePeriodParts();
 document.getElementById('fileInput').addEventListener('change',e=>handleFiles(e.target.files)); const drop=document.getElementById('drop'); drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag')}); drop.addEventListener('dragleave',()=>drop.classList.remove('drag')); drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');handleFiles(e.dataTransfer.files)});
