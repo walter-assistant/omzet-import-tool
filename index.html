@@ -97,11 +97,12 @@ function setCloudStatus(s){const el=document.getElementById('cloudStatus'); if(e
 function touchRow(r){r.updated_at=new Date().toISOString(); if(!r.created_at) r.created_at=r.updated_at; return r}
 function cloudPayload(r){return {id:r.id,status:r.status||'',afdeling:r.afdeling||'',categorie:r.categorie||'',bron:r.bron||'',blok:r.blok||'',project:r.project||'',naam:r.naam||'',datum:r.datum||'',bedrag:amountVal(r.bedrag),opmerking:r.opmerking||'',bestand:r.bestand||'',source_device:deviceId,created_at:r.created_at||new Date().toISOString(),updated_at:r.updated_at||new Date().toISOString()}}
 function saveRows(){localStorage.setItem(STORAGE_KEY, JSON.stringify(rows)); if(cloudReady&&!cloudLoading) scheduleCloudSave()}
-function loadRows(){try{const old=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); rows.splice(0,rows.length,...old.map(r=>repairRow({...r,id:r.id||uid(),bedrag:amountVal(r.bedrag),updated_at:r.updated_at||r.created_at||new Date().toISOString()}))); if(rows.length) log('Geheugen geladen: '+rows.length+' lokale regels.')}catch(e){log('Geheugen kon niet worden geladen: '+e.message)}}
+function isFailedWerkbonUnknown(r){return /werkbon/i.test(r.bestand||'') && (r.bron||'')==='Onbekend' && amountVal(r.bedrag)===0 && /PDF-type|niet herkend/i.test(r.opmerking||'')}
+function loadRows(){try{const old=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); rows.splice(0,rows.length,...old.filter(r=>!isFailedWerkbonUnknown(r)).map(r=>repairRow({...r,id:r.id||uid(),bedrag:amountVal(r.bedrag),updated_at:r.updated_at||r.created_at||new Date().toISOString()}))); if(rows.length) log('Geheugen geladen: '+rows.length+' lokale regels.')}catch(e){log('Geheugen kon niet worden geladen: '+e.message)}}
 function scheduleCloudSave(){clearTimeout(saveTimer); saveTimer=setTimeout(syncToCloud,700)}
 async function syncDeletedToCloud(){if(!cloudReady||!sb)return; const ids=[...getDeletedIds()]; if(!ids.length)return; const {error}=await sb.from(CLOUD_TABLE).delete().in('id',ids); if(error) log('Cloud verwijderen mislukt: '+error.message)}
 async function syncToCloud(){if(!cloudReady||!sb)return; try{setCloudStatus('Cloud: opslaan...'); await syncDeletedToCloud(); if(rows.length){const {error}=await sb.from(CLOUD_TABLE).upsert(rows.map(cloudPayload),{onConflict:'id'}); if(error) throw error;} setCloudStatus('Cloud: gesynchroniseerd')}catch(e){setCloudStatus('Cloud: fout'); log('Cloud opslaan mislukt: '+e.message)}}
-function mergeCloudRows(cloudRows){const deleted=getDeletedIds(); const byId=new Map(rows.map(r=>[r.id,r])); for(const c of cloudRows||[]){if(deleted.has(c.id))continue; const fixed=repairRow({...c,bedrag:amountVal(c.bedrag)}); const local=byId.get(c.id); if(!local){rows.push(fixed); continue;} const lt=new Date(local.updated_at||0).getTime(); const ct=new Date(c.updated_at||0).getTime(); if(ct>lt) Object.assign(local,fixed);} rows.sort((a,b)=>String(a.datum||'').localeCompare(String(b.datum||''))||String(a.blok||'').localeCompare(String(b.blok||'')))}
+function mergeCloudRows(cloudRows){const deleted=getDeletedIds(); const byId=new Map(rows.map(r=>[r.id,r])); for(const c of cloudRows||[]){if(deleted.has(c.id)||isFailedWerkbonUnknown(c))continue; const fixed=repairRow({...c,bedrag:amountVal(c.bedrag)}); const local=byId.get(c.id); if(!local){rows.push(fixed); continue;} const lt=new Date(local.updated_at||0).getTime(); const ct=new Date(c.updated_at||0).getTime(); if(ct>lt) Object.assign(local,fixed);} rows.sort((a,b)=>String(a.datum||'').localeCompare(String(b.datum||''))||String(a.blok||'').localeCompare(String(b.blok||'')))}
 async function initCloud(){try{if(!window.supabase){setCloudStatus('Cloud: bibliotheek ontbreekt');return;} sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY); cloudLoading=true; setCloudStatus('Cloud: laden...'); const {data,error}=await sb.from(CLOUD_TABLE).select('*').order('created_at',{ascending:true}); if(error) throw error; mergeCloudRows(data||[]); cloudReady=true; cloudLoading=false; await syncDeletedToCloud(); saveRows(); render(); setCloudStatus('Cloud: actief'); log('Cloud geladen: '+(data||[]).length+' regels.')}catch(e){cloudReady=false; cloudLoading=false; setCloudStatus('Cloud: niet actief'); log('Cloud nog niet actief: '+e.message+' — voer supabase-schema.sql één keer uit in Supabase SQL Editor.')}}
 function parseDateNL(s){const m=String(s||'').match(/(\d{2})-(\d{2})-(\d{4})/); if(!m)return null; return {d:+m[1],m:+m[2],y:+m[3]}}
 function dateFromTextOrFile(text,file){
@@ -110,7 +111,7 @@ function dateFromTextOrFile(text,file){
   return m?m[1]:'';
 }
 function inSelectedPeriod(r){const mode=document.getElementById('periodMode')?.value||'all'; const dt=parseDateNL(r.datum); if(!dt) return mode==='all'; const year=+(document.getElementById('periodYear')?.value||dt.y); if(dt.y!==year) return false; const part=+(document.getElementById('periodPart')?.value||1); if(mode==='month') return dt.m===part; if(mode==='quarter') return Math.ceil(dt.m/3)===part; if(mode==='half') return (dt.m<=6?1:2)===part; return true}
-function filteredRows(){return rows.filter(inSelectedPeriod)}
+function filteredRows(){return rows.filter(r=>!isFailedWerkbonUnknown(r)).filter(inSelectedPeriod)}
 function monthOptions(selected){const months=['Jan','Feb','Mrt','Apr','Mei','Jun','Jul','Aug','Sep','Okt','Nov','Dec']; return '<option value="">Maand</option>'+months.map((m,i)=>`<option value="${i+1}" ${selected===i+1?'selected':''}>${m}</option>`).join('')}
 function moveDateToMonth(dateValue,month){const m=+month; if(!m)return dateValue||''; const dt=parseDateNL(dateValue); const year=dt?.y || +(document.getElementById('periodYear')?.value||new Date().getFullYear()); const maxDay=new Date(year,m,0).getDate(); const day=String(Math.min(dt?.d||1,maxDay)).padStart(2,'0'); return `${day}-${String(m).padStart(2,'0')}-${year}`}
 function updatePeriodParts(){const mode=document.getElementById('periodMode')?.value||'all'; const part=document.getElementById('periodPart'); if(!part)return; const old=part.value; let opts=[]; if(mode==='all') opts=[['1','Heel jaar']]; if(mode==='month') opts=['Januari','Februari','Maart','April','Mei','Juni','Juli','Augustus','September','Oktober','November','December'].map((m,i)=>[String(i+1),m]); if(mode==='quarter') opts=[['1','Q1'],['2','Q2'],['3','Q3'],['4','Q4']]; if(mode==='half') opts=[['1','H1'],['2','H2']]; part.innerHTML=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join(''); if([...part.options].some(o=>o.value===old)) part.value=old}
@@ -135,6 +136,8 @@ function repairRow(r){
   if(r.bron==='Veldoffice' && invoiceDate && !r.datum) r.datum=invoiceDate;
   return r;
 }
+function projectFromFilename(file){return pick(/\b((?:GR\d{3}-)?\d{4}-\d{3}|\d{2}-\d{4}-\d{3})\b/i,file?.name||'')}
+function nameFromWerkbonFilename(file){let n=String(file?.name||'').replace(/---.*$/,'').replace(/\.pdf$/i,''); const code=projectFromFilename(file); if(code)n=n.replace(code,''); n=n.replace(/[_-]*werkbon.*$/i,'').replace(/^[-_\s]+|[-_\s]+$/g,'').replace(/[_-]+/g,' '); return norm(n)}
 function addRow(r){rows.push(touchRow(repairRow({...r,id:uid()}))) }
 function parseVeldoffice(text,file){
   if(!/VERZAMELFACTUUR/i.test(text) || !/VERBRUIKSARTIKELEN/i.test(text)) return 0;
@@ -195,7 +198,9 @@ function parseWerkbon(text,file){
     pick(/Opdrachtgever\s*:\s*(.*?)(?=\s+Projectnummer\s*:)/i,one);
   const klantProject=pick(/Projectnummer klant\s*:\s*(.*?)(?=\s+Kenmerk\s*:)/i,one) ||
     pick(/Locatie\s*:\s*(.*?)(?=\s+Betreft\s*:)/i,one);
-  let kenmerk=pick(/Kenmerk\s*:\s*([^\s]+)/i,one) || pick(/Projectnummer\s*:\s*([^\s]+)/i,one);
+  let kenmerk=pick(/Kenmerk\s*:\s*([^\s:]+)(?=\s|$)/i,one) || pick(/Projectnummer\s*:\s*([^\s:]+)(?=\s|$)/i,one);
+  if(/^(Datum|Werkzaamheden|Contactpersoon|Projectnummer)$/i.test(kenmerk)) kenmerk='';
+  if(!kenmerk) kenmerk=projectFromFilename(file);
   if(!kenmerk) kenmerk=pick(/\b(GR\d{3}-\d{4}-\d{3})\b/i,one);
   if(!kenmerk) kenmerk=pick(/\b(\d{2}-\d{4}-\d{3})\b/i,one);
 
@@ -230,6 +235,7 @@ function parseWerkbon(text,file){
   let naam=klantProject;
   if(!naam) naam=pick(/per stuk\s+(.*?)\s+\d{1,2}-\d{1,2}-\d{4}\s+Boringen/i,one);
   if(!naam) naam=pick(/\b(?:GPS Meting|Klic melding)\b.*?\s+([A-Z][^€]+?)\s+\d{1,2}-\d{1,2}-\d{4}\s+Boringen/i,one);
+  if(!naam) naam=nameFromWerkbonFilename(file);
   let blok=bedrijf||blockFromText(one);
   if(blok&&/\s+T\.a\.v\./i.test(blok)) blok=norm(blok.split(/\s+T\.a\.v\./i)[0]);
   if(!blok){
