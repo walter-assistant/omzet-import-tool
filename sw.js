@@ -1,4 +1,4 @@
-const CACHE_NAME = 'omzet-import-tool-v10';
+const CACHE_NAME = 'omzet-import-tool-v11-live-cloud';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,11 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
+  // Never serve financial API responses from the PWA asset cache.
+  if (url.hostname.endsWith('.supabase.co') || url.pathname.startsWith('/api/')) {
+    event.respondWith(fetch(event.request, {cache:'no-store'}));
+    return;
+  }
   const isAppShell = event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('/index.html');
 
   if (isAppShell) {
