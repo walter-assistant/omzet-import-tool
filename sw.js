@@ -1,7 +1,9 @@
-const CACHE_NAME = 'omzet-import-tool-v11-live-cloud';
+const CACHE_NAME = 'omzet-import-tool-v12-production';
 const CORE_ASSETS = [
   './',
   './index.html',
+  './production-core.js?v=1',
+  './production.js?v=1',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
